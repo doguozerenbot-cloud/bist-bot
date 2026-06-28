@@ -276,12 +276,12 @@ Başarı Oranı: {sonuçlar['başarı_oranı']}%
             self.cron_tarama,
             trigger=CronTrigger(
                 hour=9,
-                minute=30,
+                minute=10,
                 day_of_week='0-4',
                 timezone=TIMEZONE
             ),
             id='daily_screen',
-            name='09:30 Günlük Tarama'
+            name='09:10 Günlük Tarama'
         )
 
         if not self.scheduler.running:
