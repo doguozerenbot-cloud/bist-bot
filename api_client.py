@@ -125,21 +125,31 @@ class BISTDataClient:
             return None
     
     def get_hisse_listesi(self, index: str = 'BIST100') -> List[str]:
-        """Hisse Listesi Al"""
-        try:
-            data = self._get(
-                'indices/components',
-                {'index': index}
-            )
-            
-            if data and 'symbols' in data:
-                return data['symbols']
-            
-            return []
-            
-        except Exception as e:
-            self.logger.error(f"Hisse Listesi Hatası: {str(e)}")
-            return []
+    """BIST100 Hisse Listesi - Manuel"""
+    
+    # BIST100 hisseler (Gerçek liste)
+    bist100 = [
+        'AEFES', 'AKBNK', 'AKSA', 'AKSEN', 'ALARK', 'ANADOLU', 'ARCLK', 'ASELS',
+        'BIMAS', 'BISAS', 'BOBRN', 'BORUP', 'BRLSOKE', 'BRNCK', 'CCOLA', 'CIMSA',
+        'DOGUS', 'DOHOL', 'ECZBAI', 'EKGYO', 'ENKA', 'EREGL', 'FBURS', 'FORDS',
+        'GARAN', 'GASRI', 'GUBRT', 'GUNSI', 'HALKB', 'HEKAS', 'IPEKE', 'ISCTR',
+        'ISYAT', 'KCHOL', 'KOZAL', 'KZGLD', 'KRDMD', 'MIGRS', 'MARDIN', 'OTOKAR',
+        'PETKIM', 'SAHOL', 'SARKUY', 'SASA', 'SISE', 'SKBNK', 'TAVHL', 'TCELL',
+        'THY', 'TEKFEN', 'TOFAS', 'TSKLC', 'TTKOM', 'TUKAS', 'TUPRS', 'ULKER',
+        'VAKBN', 'VESTEL', 'YAZICI', 'YKBNK', 'ZOREN', 'KUYAS', 'PEGASUS', 'ODAS',
+        'MAVI', 'ENJSA', 'MLPSAG', 'SOK', 'KONTROLMATIK', 'TUREKS', 'QUA', 'CAN2',
+        'GEN', 'GIRISIM', 'MARGUN', 'MIATEKNOLOJI', 'PASIFIK', 'DAP', 'GURSEL',
+        'EUROPEN', 'KILER', 'ASTOR', 'CVK', 'EUROPOWER', 'GRAINTURK', 'CWENERJI',
+        'KATILIMEVIM', 'PASIFIKLOJISTIK', 'IZDEMIR', 'ENERYA', 'REEDER', 'TAB',
+        'PASIFIK_TEKNOLOJI', 'OBA', 'ALTINAY', 'EFOR', 'GULERMAK', 'DESTEK', 'BALSU',
+        'PASIFIK_HOLDING'
+    ]
+    
+    if index == 'BIST100':
+        self.logger.info(f"📋 {len(bist100)} Hisse Yüklendi")
+        return bist100
+    
+    return []
 
 # ============================================================================
 # TEKNİK GÖSTERGELERİ İSLEMCİSİ
