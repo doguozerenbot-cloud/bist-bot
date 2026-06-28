@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 API İstemci - Veri Çekme
-BIST Hisse Verileri + Teknik Göstergeler
+BIST Hisse Verileri + Teknik Göstergeler (Alpha Vantage)
 """
 import logging
 import requests
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class APIConfig:
     """API Yapılandırması"""
     
-    # Finans API (Teknik Göstergeler)
+    # Finans API (Teknik Göstergeler) - Alpha Vantage
     FINANS_API_KEY = os.getenv('FINANS_API_KEY', '')
     FINANS_API_URL = os.getenv('FINANS_API_URL', 'https://www.alphavantage.co')
     
@@ -31,7 +31,7 @@ class APIConfig:
     BROKER_API_URL = os.getenv('BROKER_API_URL', 'https://finnhub.io/api/v1')
     
     # API Rate Limit (İstek başına gecikme)
-    RATE_LIMIT_DELAY = 1  # Saniye
+    RATE_LIMIT_DELAY = 0.5  # Saniye (Alpha Vantage: 5 istekler/dakika)
 
 # ============================================================================
 # BIST VERİ İSLEMCİSİ
@@ -157,74 +157,189 @@ class BISTDataClient:
         return []
 
 # ============================================================================
-# TEKNİK GÖSTERGELERİ İSLEMCİSİ
+# TEKNİK GÖSTERGELERİ İSLEMCİSİ - ALPHA VANTAGE
 # ============================================================================
 
 class TechnicalDataClient:
-    """Teknik Göstergeler - Finans API'sinden"""
+    """Teknik Göstergeler - Alpha Vantage API'sinden"""
     
     def __init__(self, api_key: str = '', api_url: str = ''):
-        self.api_key = api_key or APIConfig.FINANS_API_KEY
-        self.api_url = api_url or APIConfig.FINANS_API_URL
-        self.session = requests.Session()
+        self.api_key = api_key or os.getenv('FINANS_API_KEY', '')
+        self.api_url = api_url or os.getenv('FINANS_API_URL', 'https://www.alphavantage.co')
         self.logger = logging.getLogger(__name__)
     
-    def _get(self, endpoint: str, params: Dict = None) -> Dict:
-        """GET İsteği Yap"""
+    def _get_alpha_vantage(self, function: str, symbol: str, 
+                          interval: str = 'daily', params: Dict = None) -> Optional[Dict]:
+        """Alpha Vantage API çağrısı"""
         try:
             if params is None:
                 params = {}
             
-            params['apikey'] = self.api_key
-            
             url = f"{self.api_url}/query"
+            params.update({
+                'function': function,
+                'symbol': f'{symbol}.HE',
+                'interval': interval,
+                'apikey': self.api_key,
+            })
             
-            self.logger.info(f"📈 Teknik API: {endpoint}")
-            
-            response = self.session.get(
-                url,
-                params=params,
-                timeout=10
-            )
-            
+            response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
+            data = response.json()
             
             time.sleep(APIConfig.RATE_LIMIT_DELAY)
             
-            return response.json()
+            return data
             
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"❌ Teknik API Hatası: {str(e)}")
-            return {}
+        except Exception as e:
+            self.logger.error(f"Alpha Vantage Hatası ({function}): {str(e)}")
+            return None
     
-    def get_göstergeler(self, kod: str, interval: str = 'daily') -> Optional[Dict]:
-        """Teknik Göstergeler Al"""
+    def get_rsi(self, kod: str, period: int = 14) -> Optional[float]:
+        """RSI (Relative Strength Index)"""
         try:
-            # Şimdilik placeholder değerler
+            data = self._get_alpha_vantage('RSI', kod, params={'time_period': period})
+            
+            if data and 'Technical Analysis: RSI' in data:
+                # En son değeri al
+                rsi_values = data['Technical Analysis: RSI']
+                if not rsi_values:
+                    return None
+                    
+                latest_date = list(rsi_values.keys())[0]
+                rsi = float(rsi_values[latest_date]['RSI'])
+                
+                self.logger.info(f"📈 {kod} RSI: {rsi:.2f}")
+                return rsi
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"RSI Hatası ({kod}): {str(e)}")
+            return None
+    
+    def get_macd(self, kod: str) -> Optional[Dict]:
+        """MACD (Moving Average Convergence Divergence)"""
+        try:
+            data = self._get_alpha_vantage('MACD', kod)
+            
+            if data and 'Technical Analysis: MACD' in data:
+                macd_values = data['Technical Analysis: MACD']
+                if not macd_values:
+                    return None
+                    
+                latest_date = list(macd_values.keys())[0]
+                latest = macd_values[latest_date]
+                
+                result = {
+                    'macd': float(latest.get('MACD', 0)),
+                    'signal': float(latest.get('MACD_Signal', 0)),
+                    'histogram': float(latest.get('MACD_Hist', 0)),
+                }
+                
+                self.logger.info(f"📈 {kod} MACD: {result}")
+                return result
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"MACD Hatası ({kod}): {str(e)}")
+            return None
+    
+    def get_adx(self, kod: str, period: int = 14) -> Optional[float]:
+        """ADX (Average Directional Index)"""
+        try:
+            data = self._get_alpha_vantage('ADX', kod, params={'time_period': period})
+            
+            if data and 'Technical Analysis: ADX' in data:
+                adx_values = data['Technical Analysis: ADX']
+                if not adx_values:
+                    return None
+                    
+                latest_date = list(adx_values.keys())[0]
+                adx = float(adx_values[latest_date]['ADX'])
+                
+                self.logger.info(f"📈 {kod} ADX: {adx:.2f}")
+                return adx
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"ADX Hatası ({kod}): {str(e)}")
+            return None
+    
+    def get_ema(self, kod: str, period: int = 20) -> Optional[float]:
+        """Exponential Moving Average"""
+        try:
+            data = self._get_alpha_vantage('EMA', kod, params={'time_period': period})
+            
+            if data and 'Technical Analysis: EMA' in data:
+                ema_values = data['Technical Analysis: EMA']
+                if not ema_values:
+                    return None
+                    
+                latest_date = list(ema_values.keys())[0]
+                ema = float(ema_values[latest_date]['EMA'])
+                
+                self.logger.info(f"📈 {kod} EMA{period}: {ema:.2f}")
+                return ema
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"EMA Hatası ({kod}): {str(e)}")
+            return None
+    
+    def get_atr(self, kod: str, period: int = 14) -> Optional[float]:
+        """ATR (Average True Range)"""
+        try:
+            data = self._get_alpha_vantage('ATR', kod, params={'time_period': period})
+            
+            if data and 'Technical Analysis: ATR' in data:
+                atr_values = data['Technical Analysis: ATR']
+                if not atr_values:
+                    return None
+                    
+                latest_date = list(atr_values.keys())[0]
+                atr = float(atr_values[latest_date]['ATR'])
+                
+                self.logger.info(f"📈 {kod} ATR: {atr:.2f}")
+                return atr
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"ATR Hatası ({kod}): {str(e)}")
+            return None
+    
+    def get_göstergeler(self, kod: str) -> Optional[Dict]:
+        """Tüm Teknik Göstergeler - Alpha Vantage'dan"""
+        try:
+            self.logger.info(f"📊 {kod} Teknik Göstergeler Çekiliyor...")
+            
+            # Tüm göstergeleri al
+            rsi = self.get_rsi(kod) or 50
+            macd = self.get_macd(kod) or {'macd': 0, 'signal': 0, 'histogram': 0}
+            adx = self.get_adx(kod) or 20
+            ema20 = self.get_ema(kod, 20) or 0
+            ema50 = self.get_ema(kod, 50) or 0
+            ema200 = self.get_ema(kod, 200) or 0
+            atr = self.get_atr(kod) or 0
+            
             return {
-                'ema20': 0,
-                'ema50': 0,
-                'ema200': 0,
-                'rsi': 0,
-                'adx': 0,
-                'atr': 0,
-                'macd': 0,
-                'bollinger_upper': 0,
-                'bollinger_lower': 0,
+                'ema20': ema20,
+                'ema50': ema50,
+                'ema200': ema200,
+                'rsi': rsi,
+                'adx': adx,
+                'atr': atr,
+                'macd': macd.get('macd', 0),
+                'macd_signal': macd.get('signal', 0),
+                'macd_histogram': macd.get('histogram', 0),
             }
             
         except Exception as e:
-            self.logger.error(f"Teknik Gösterge Hatası ({kod}): {str(e)}")
-            return None
-    
-    def get_fiyat_geçmişi(self, kod: str, gün: int = 60) -> Optional[List[Dict]]:
-        """Fiyat Geçmişi Al (OHLCV)"""
-        try:
-            # Şimdilik placeholder
-            return []
-            
-        except Exception as e:
-            self.logger.error(f"Fiyat Geçmişi Hatası ({kod}): {str(e)}")
+            self.logger.error(f"Teknik Göstergeler Hatası ({kod}): {str(e)}")
             return None
 
 # ============================================================================
@@ -239,108 +354,64 @@ class DataFetcher:
         self.tech_client = TechnicalDataClient()
         self.logger = logging.getLogger(__name__)
     
-    def get_hisse_analizi(self, kod: str) -> Optional[Dict]:
-        """Hisse Tam Analiz Verisi"""
+    def get_bist_verisi(self, kod: str) -> Optional[Dict]:
+        """BIST hissesi için tam veri paketi"""
         try:
-            self.logger.info(f"🔍 {kod} Verisi Çekiliyor...")
-            
-            # Hisse Fiyat Verileri
+            # Fiyat verisi
             hisse = self.bist_client.get_hisse(kod)
             if not hisse:
-                self.logger.error(f"❌ {kod} hisse verisi alınamadı")
                 return None
             
-            # Temel Veriler
-            temel = self.bist_client.get_temel_veriler(kod)
-            if not temel:
-                self.logger.warning(f"⚠️ {kod} temel veriler alınamadı - Değer 0")
-                temel = {
-                    'pe': 0,
-                    'roe': 0,
-                    'borç_öz': 0,
-                    'temettü': 0,
-                    'piyasa_değeri': 0,
-                    'adv': 0,
-                }
+            # Temel veriler
+            temel = self.bist_client.get_temel_veriler(kod) or {}
             
-            # Teknik Göstergeler
-            teknik = self.tech_client.get_göstergeler(kod)
-            if not teknik:
-                self.logger.warning(f"⚠️ {kod} teknik göstergeler alınamadı - Değer 0")
-                teknik = {
-                    'ema20': 0,
-                    'ema50': 0,
-                    'ema200': 0,
-                    'rsi': 0,
-                    'adx': 0,
-                    'atr': 0,
-                    'macd': 0,
-                }
+            # Teknik göstergeler (Alpha Vantage)
+            teknik = self.tech_client.get_göstergeler(kod) or {}
             
-            # Birleştir
-            veri = {
-                **hisse,
-                **temel,
-                **teknik,
-                'güncelleme_saati': datetime.now().isoformat(),
+            return {
+                'kod': kod,
+                'fiyat': hisse.get('fiyat'),
+                'hacim': hisse.get('hacim'),
+                'açılış': hisse.get('açılış'),
+                'kapanış': hisse.get('kapanış'),
+                '52w_high': hisse.get('52w_high'),
+                '52w_low': hisse.get('52w_low'),
+                'pe': temel.get('pe', 0),
+                'roe': temel.get('roe', 0),
+                'borç_öz': temel.get('borç_öz', 0),
+                'adv': temel.get('adv', 0),
+                'rsi': teknik.get('rsi', 0),
+                'macd': teknik.get('macd', 0),
+                'macd_signal': teknik.get('macd_signal', 0),
+                'macd_histogram': teknik.get('macd_histogram', 0),
+                'ema20': teknik.get('ema20', 0),
+                'ema50': teknik.get('ema50', 0),
+                'ema200': teknik.get('ema200', 0),
+                'adx': teknik.get('adx', 0),
+                'atr': teknik.get('atr', 0),
+                'saat': hisse.get('saat'),
             }
             
-            self.logger.info(f"✓ {kod} Verisi Başarıyla Çekildi")
-            
-            return veri
-            
         except Exception as e:
-            self.logger.error(f"❌ Hisse Analizi Hatası ({kod}): {str(e)}")
+            self.logger.error(f"BIST Verisi Hatası ({kod}): {str(e)}")
             return None
     
-    def get_hisse_listesi_analiz(self, index: str = 'BIST100') -> List[Dict]:
-        """Tüm Hisselerin Analizi"""
+    def get_bist100_listesi(self) -> List[str]:
+        """BIST100 hisselerini getir"""
+        return self.bist_client.get_hisse_listesi('BIST100')
+    
+    def tarama_yap(self) -> List[Dict]:
+        """Tüm BIST100 hisselerini tara"""
+        hisseler = self.get_bist100_listesi()
+        veriler = []
         
-        self.logger.info(f"📊 {index} Taraması Başlıyor...")
-        
-        # Hisse Listesi Al
-        hisseler = self.bist_client.get_hisse_listesi(index)
-        
-        if not hisseler:
-            self.logger.error(f"❌ {index} Hisse Listesi Alınamadı")
-            return []
-        
-        self.logger.info(f"📋 {len(hisseler)} Hisse Bulundu")
-        
-        # Her Hissenin Verisi
-        sonuçlar = []
-        
-        for i, kod in enumerate(hisseler, 1):
-            veri = self.get_hisse_analizi(kod)
-            
+        for kod in hisseler:
+            veri = self.get_bist_verisi(kod)
             if veri:
-                sonuçlar.append(veri)
-            
-            # Progress Log
-            if i % 10 == 0:
-                self.logger.info(f"İlerleme: {i}/{len(hisseler)} (%{int(i/len(hisseler)*100)})")
+                veriler.append(veri)
+                self.logger.info(f"✓ {kod}: {veri.get('fiyat')} TL")
+            else:
+                self.logger.warning(f"✗ {kod}: Veri alınamadı")
         
-        self.logger.info(f"✓ {len(sonuçlar)}/{len(hisseler)} Hisse Analizi Tamamlandı")
-        
-        return sonuçlar
-
-# ============================================================================
-# ÖRNEK KULLANIM
-# ============================================================================
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Test
-    fetcher = DataFetcher()
-    
-    # Tek hisse
-    veri = fetcher.get_hisse_analizi('AKBNK')
-    if veri:
-        print(f"\n✓ {veri['kod']}")
-        print(f"  Fiyat: {veri.get('fiyat')} TL")
-        print(f"  P/E: {veri.get('pe')}")
-        print(f"  RSI: {veri.get('rsi')}")
+        self.logger.info(f"📊 Tarama Tamamlandı: {len(veriler)}/{len(hisseler)} hisse")
+        return veriler
