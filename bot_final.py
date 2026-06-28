@@ -143,7 +143,8 @@ Başarı Oranı: {sonuçlar['başarı_oranı']}%
         mesaj += "="*50 + "\n"
         
         try:
-            self.notifier.send_message(mesaj)
+            # Sync metodu kullan (send_message_sync)
+            self.notifier.send_message_sync(mesaj)
             logger.info("✅ Telegram Bildirimi Gönderildi")
         except Exception as e:
             logger.error(f"❌ Telegram Hatası: {str(e)}")
