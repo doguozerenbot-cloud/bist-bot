@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-BIST PYTHON BOT - FINAL VERSION
-Finnhub + Alpha Vantage + Telegram + Railway
+BIST PYTHON BOT - FINAL VERSION + FAZA 1
+Finnhub + Alpha Vantage + Telegram + Email + Database + Logging
 """
 import logging
 import os
@@ -16,30 +16,34 @@ from apscheduler.triggers.cron import CronTrigger
 from api_client import DataFetcher
 from analyzer import BISTAnalyzer
 from telegram_notifier import TelegramNotifier
+from email_notifier import EmailNotifier
+from database import DatabaseManager
+from logger_config import get_logger, get_performance_tracker, get_structured_logger
 from config import (
     TARAMA_SAATI, BIST_AÇILIŞ, TIMEZONE, ALLOWED_USERS
 )
 
 # ============================================================================
-# LOGGING
+# LOGGING - ADVANCED
 # ============================================================================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+
+logger = get_logger('bist_bot')
+perf_tracker = get_performance_tracker(logger)
+struct_logger = get_structured_logger(logger)
 
 # ============================================================================
 # ANA BOT
 # ============================================================================
 
 class BISTBot:
-    """BIST Python Bot - Sinyal Üreticisi"""
+    """BIST Python Bot - Sinyal Üreticisi + Database + Email"""
     
     def __init__(self):
         self.fetcher = DataFetcher()
         self.analyzer = BISTAnalyzer()
         self.notifier = TelegramNotifier()
+        self.email_notifier = EmailNotifier()
+        self.db = DatabaseManager()
         self.scheduler = BackgroundScheduler(timezone=TIMEZONE)
         
         self.tarama_sonuçları = {}
@@ -50,12 +54,17 @@ class BISTBot:
     def tara(self, index: str = 'BIST100') -> Dict:
         """BIST100 Taraması Yap"""
         
+        perf_tracker.start_timer('tara')
         logger.info(f"🔍 {index} Taraması Başlıyor...")
         
         hisseler = self.fetcher.tarama_yap()
         
         if not hisseler:
             logger.error(f"❌ {index} Veri Alınamadı")
+            struct_logger.log_event('SCAN_ERROR', {
+                'index': index,
+                'reason': 'Veri alınamadı'
+            })
             return {'hata': 'Veri alınamadı', 'toplam': 0, 'tarama_geçen': 0}
         
         tarama_geçenler = []
@@ -67,9 +76,21 @@ class BISTBot:
             try:
                 analiz_sonucu = self.analyzer.analiz_hisse(hisse)
                 
+                # Veritabanına kaydet
+                self.db.tarama_kaydet(kod, analiz_sonucu)
+                
                 if analiz_sonucu.get('tarama_geçti'):
                     tarama_geçenler.append(analiz_sonucu)
                     logger.info(f"✅ {kod} Tarama Geçti (Skor: {analiz_sonucu.get('skor')}%)")
+                    
+                    # Sinyal olursa veritabanına kaydet
+                    if analiz_sonucu.get('sinyal') in ['BUY', 'CAUTION']:
+                        self.db.sinyal_kaydet(kod, analiz_sonucu)
+                        struct_logger.log_trade_signal(
+                            kod, 
+                            analiz_sonucu.get('sinyal'),
+                            analiz_sonucu
+                        )
                 
                 if analiz_sonucu.get('uyarı'):
                     uyarılar.append({
@@ -79,6 +100,11 @@ class BISTBot:
             
             except Exception as e:
                 logger.error(f"❌ {kod} Analiz Hatası: {str(e)}")
+                struct_logger.log_error_detail(
+                    'ANALYSIS_ERROR',
+                    str(e),
+                    {'kod': kod}
+                )
                 continue
         
         # En yüksek skordan başlayarak sırala
@@ -95,17 +121,30 @@ class BISTBot:
             'uyarılar': uyarılar[:5],  # Top 5
         }
         
+        # İstatistik kaydet
+        tarih = datetime.now(pytz.timezone(TIMEZONE)).strftime('%Y-%m-%d')
+        self.db.tarama_istatistigi_kaydet(tarih, {
+            'toplam': len(hisseler),
+            'gecen': len(tarama_geçenler),
+            'oran': sonuç['başarı_oranı'],
+            'ortalama_skor': sum([h.get('skor', 0) for h in tarama_geçenler]) / len(tarama_geçenler) if tarama_geçenler else 0
+        })
+        
         self.tarama_sonuçları = sonuç
         self.son_tarama_zamanı = datetime.now(pytz.timezone(TIMEZONE))
         
-        logger.info(f"✅ Tarama Tamamlandı: {len(tarama_geçenler)}/{len(hisseler)} geçti")
+        # Performance log
+        duration = perf_tracker.end_timer('tara')
+        struct_logger.log_scan_result(len(hisseler), len(tarama_geçenler), sonuç['başarı_oranı'])
+        
+        logger.info(f"✅ Tarama Tamamlandı: {len(tarama_geçenler)}/{len(hisseler)} geçti ({duration:.2f}s)")
         
         return sonuç
     
     def bildir_tarama_sonuçları(self, sonuçlar: Dict):
-        """Tarama Sonuçlarını Telegram'da Bildir"""
+        """Tarama Sonuçlarını Telegram + Email'de Bildir"""
         
-        logger.info("📱 Telegram Bildirimi Gönderiliyor...")
+        logger.info("📱📧 Telegram + Email Bildirimi Gönderiliyor...")
         
         tr_time = datetime.now(pytz.timezone(TIMEZONE)).strftime('%H:%M:%S')
         
@@ -143,11 +182,20 @@ Başarı Oranı: {sonuçlar['başarı_oranı']}%
         mesaj += "="*50 + "\n"
         
         try:
-            # Sync metodu kullan (send_message_sync)
+            # Telegram gönder
             self.notifier.send_message_sync(mesaj)
             logger.info("✅ Telegram Bildirimi Gönderildi")
         except Exception as e:
             logger.error(f"❌ Telegram Hatası: {str(e)}")
+            struct_logger.log_error_detail('TELEGRAM_ERROR', str(e))
+        
+        try:
+            # Email gönder (Telegram backup)
+            self.email_notifier.bildir_tarama_sonucu(sonuçlar)
+            logger.info("✅ Email Bildirimi Gönderildi")
+        except Exception as e:
+            logger.error(f"❌ Email Hatası: {str(e)}")
+            struct_logger.log_error_detail('EMAIL_ERROR', str(e))
     
     def setup_scheduler(self):
         """Scheduler'ı Kur - Pazartesi-Cuma 09:30'da Çalış"""
@@ -171,18 +219,32 @@ Başarı Oranı: {sonuçlar['başarı_oranı']}%
     def cron_tarama(self):
         """Cron Taraması (Scheduler tarafından çağrılır)"""
         logger.info("⏰ Scheduled Tarama Tetiklendi")
-        sonuçlar = self.tara()
-        self.bildir_tarama_sonuçları(sonuçlar)
+        try:
+            sonuçlar = self.tara()
+            self.bildir_tarama_sonuçları(sonuçlar)
+        except Exception as e:
+            logger.error(f"❌ Cron Tarama Hatası: {str(e)}")
+            self.email_notifier.bildir_hata(
+                f"Scheduled tarama başarısız: {str(e)}",
+                str(e)
+            )
     
     def manuel_tarama(self) -> Dict:
         """Şu Anda Manuel Tarama Yap"""
         
         logger.info("🔍 Manuel Tarama Tetiklendi")
         
-        sonuçlar = self.tara()
-        self.bildir_tarama_sonuçları(sonuçlar)
-        
-        return sonuçlar
+        try:
+            sonuçlar = self.tara()
+            self.bildir_tarama_sonuçları(sonuçlar)
+            return sonuçlar
+        except Exception as e:
+            logger.error(f"❌ Manuel Tarama Hatası: {str(e)}")
+            self.email_notifier.bildir_hata(
+                f"Manuel tarama başarısız: {str(e)}",
+                str(e)
+            )
+            return {'hata': str(e)}
     
     def başlat(self):
         """Bot'u Başlat"""
@@ -214,7 +276,10 @@ def health():
         'turkey_time': turkey_time,
         'next_scan': '09:30 (Her gün Pazartesi-Cuma)',
         'bist_opens': '10:00',
-        'mode': 'SIGNAL (Manual Trading)'
+        'mode': 'SIGNAL (Manual Trading)',
+        'database': 'SQLite ✅',
+        'email': 'Enabled ✅',
+        'logging': 'Advanced ✅'
     }), 200
 
 @app.route('/tara', methods=['POST'])
@@ -287,8 +352,43 @@ def durum_endpoint():
             'timezone': TIMEZONE,
             'son_tarama': bot.son_tarama_zamanı.isoformat() if bot.son_tarama_zamanı else 'Henüz tarama yok',
             'tarama_sonuçları': len(bot.tarama_sonuçları),
+            'database': 'SQLite ✅',
+            'email_notifier': 'Enabled ✅',
+            'logging': 'Advanced ✅',
         }
     }), 200
+
+@app.route('/acik-sinyaller', methods=['GET'])
+def acik_sinyaller_endpoint():
+    """Açık Sinyalleri Getir"""
+    
+    try:
+        sinyaller = bot.db.acik_sinyaller_getir()
+        
+        return jsonify({
+            'status': 'success',
+            'data': [dict(s) for s in sinyaller]
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"❌ Sinyal Getirme Hatası: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/performans', methods=['GET'])
+def performans_endpoint():
+    """Performans Verileri"""
+    
+    try:
+        performans = bot.db.performans_getir()
+        
+        return jsonify({
+            'status': 'success',
+            'data': dict(performans) if performans else {}
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"❌ Performans Getirme Hatası: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.errorhandler(404)
 def not_found(error):
@@ -313,7 +413,8 @@ if __name__ == '__main__':
         logger.info(f"🌐 Flask App {port} Portunda Başlıyor...")
         logger.info(f"📅 Tarama: 09:30 (Pazartesi-Cuma)")
         logger.info(f"⏰ BIST: 10:00 (Senin karar zamanı)")
-        logger.info(f"🤖 Mode: SİNYAL + TELEGRAM BİLDİRİMİ")
+        logger.info(f"🤖 Mode: SİNYAL + TELEGRAM + EMAIL + DATABASE")
+        logger.info(f"📊 Logging: Advanced (logs/ klasörü)")
         logger.info("="*60)
         
         app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
