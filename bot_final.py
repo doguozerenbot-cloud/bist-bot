@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-BIST PYTHON BOT - FINAL VERSION + FAZA 1 (FIXED)
+BIST PYTHON BOT - FINAL VERSION + FAZA 1 (FIXED v2)
 Finnhub + Alpha Vantage + Telegram + Email + Database + Logging
-FİXED: Race Condition, Connection Pooling, Rate Limiting, Timeout
+FİXED: Race Condition, Connection Pooling, Rate Limiting, Timeout, 18:00 Shutdown
 """
 import logging
 import os
@@ -84,23 +84,23 @@ class BISTBot:
         self.db = DatabaseManager()
         self.scheduler = BackgroundScheduler(timezone=TIMEZONE)
         
-        # Thread safety - FİXED: Race condition
+        # Thread safety
         self.scan_lock = threading.Lock()
         self.is_scanning = False
         
-        # Rate limiting - FİXED: Rate limiting
+        # Rate limiting
         self.rate_limiter = RateLimiter(max_requests=5, window_seconds=60)
 
         self.tarama_sonuçları = {}
         self.son_tarama_zamanı = None
-        self.tarama_timeout = 45 * 60  # 45 dakika max (FİXED: Timeout)
+        self.tarama_timeout = 45 * 60  # 45 dakika max
 
         logger.info("🤖 BIST Bot Başlatılıyor...")
 
     def tara(self, index: str = 'BIST100', timeout: int = None) -> Dict:
         """BIST100 Taraması Yap (Thread-Safe)"""
         
-        # FİXED: Race condition - Lock
+        # Race condition - Lock
         with self.scan_lock:
             if self.is_scanning:
                 logger.warning("⚠️ Tarama zaten çalışıyor, yeni istek reddedildi")
@@ -211,7 +211,7 @@ class BISTBot:
             return sonuç
 
         finally:
-            # FİXED: Lock'u bırak
+            # Lock'u bırak
             with self.scan_lock:
                 self.is_scanning = False
 
@@ -231,7 +231,7 @@ Taraması Yapılan: {sonuçlar['toplam']}
 Tarama Geçen: {sonuçlar['tarama_geçen']}
 Başarı Oranı: {sonuçlar['başarı_oranı']}%
 
-⏱️ KARAR SÜRESİ: 09:30 - 10:00 (30 DAKIKA)
+⏱️ KARAR SÜRESİ: 09:50 - 10:00 (10 DAKIKA)
 """
 
         if sonuçlar['hisseler']:
@@ -270,8 +270,9 @@ Başarı Oranı: {sonuçlar['başarı_oranı']}%
             struct_logger.log_error_detail('EMAIL_ERROR', str(e))
 
     def setup_scheduler(self):
-        """Scheduler'ı Kur - Pazartesi-Cuma 09:30'da Çalış"""
+        """Scheduler'ı Kur - Pazartesi-Cuma 09:10 Tarama + 18:00 Kapanış"""
 
+        # 09:10 Tarama Job'ı
         self.scheduler.add_job(
             self.cron_tarama,
             trigger=CronTrigger(
@@ -284,9 +285,22 @@ Başarı Oranı: {sonuçlar['başarı_oranı']}%
             name='09:10 Günlük Tarama'
         )
 
+        # 18:00 Günün Sonu Kapanması
+        self.scheduler.add_job(
+            self.kapan_gunun_sonu,
+            trigger=CronTrigger(
+                hour=18,
+                minute=0,
+                day_of_week='0-4',
+                timezone=TIMEZONE
+            ),
+            id='daily_shutdown',
+            name='18:00 Günün Sonu Kapanması'
+        )
+
         if not self.scheduler.running:
             self.scheduler.start()
-            logger.info("✅ Scheduler Başlatıldı (Her gün 09:30 - Pazartesi-Cuma)")
+            logger.info("✅ Scheduler Başlatıldı (09:10 Tarama + 18:00 Kapanış)")
 
     def cron_tarama(self):
         """Cron Taraması (Scheduler tarafından çağrılır)"""
@@ -301,12 +315,65 @@ Başarı Oranı: {sonuçlar['başarı_oranı']}%
                 str(e)
             )
 
+    def kapan_gunun_sonu(self):
+        """18:00 Günün Sonu Kapanması - Açık Pozisyonları Kontrol Et"""
+        logger.info("🛑 18:00 Günün Sonu - Pozisyon Kontrol")
+        
+        try:
+            # Açık pozisyonları getir
+            sinyaller = self.db.acik_sinyaller_getir()
+            acik_pozisyon_sayisi = len(list(sinyaller)) if sinyaller else 0
+            
+            if acik_pozisyon_sayisi > 0:
+                logger.warning(f"⚠️ {acik_pozisyon_sayisi} Açık Pozisyon Kapalı!")
+                
+                # Email ile uyar
+                self.email_notifier.bildir_hata(
+                    "🛑 GÜNÜN SONU - Açık Pozisyonlar",
+                    f"⚠️ {acik_pozisyon_sayisi} pozisyon açık!\n\nLütfen broker'da manuel olarak TÜM POZİSYONLARI KAPAYIN!\n\n18:00'den sonra işlem yapılamaz."
+                )
+                
+                # Telegram da uyar
+                try:
+                    kapan_mesaj = f"""
+🛑 GÜNÜN SONU - 18:00
+
+⚠️ AÇIK POZİSYON VAR: {acik_pozisyon_sayisi}
+
+📌 LÜTFEN:
+1. Broker uygulamasını aç
+2. TÜM POZİSYONLARI KAPAT
+3. İşlem bitirme-den sakın!
+
+⏰ 18:00'den sonra işlem yapılamaz!
+"""
+                    self.notifier.send_message_sync(kapan_mesaj)
+                except:
+                    pass
+            else:
+                logger.info("✅ Günün Sonu - Tüm Pozisyonlar Kapalı")
+            
+            # Log dosyasına kaydet
+            struct_logger.log_event('DAILY_SHUTDOWN', {
+                'acik_pozisyon': acik_pozisyon_sayisi,
+                'saat': datetime.now(pytz.timezone(TIMEZONE)).isoformat()
+            })
+            
+            logger.info("✅ Günün Sonu İşlemi Tamamlandı")
+            
+        except Exception as e:
+            logger.error(f"❌ Günün Sonu Hatası: {str(e)}")
+            self.email_notifier.bildir_hata(
+                "❌ Günün Sonu Hata",
+                str(e)
+            )
+
     def manuel_tarama(self, user_id: str = None) -> Dict:
         """Şu Anda Manuel Tarama Yap (Rate Limited)"""
 
         logger.info(f"🔍 Manuel Tarama Tetiklendi (User: {user_id})")
         
-        # FİXED: Rate limiting
+        # Rate limiting
         if user_id:
             if not self.rate_limiter.is_allowed(user_id):
                 logger.warning(f"❌ Rate limit exceeded for user {user_id}")
@@ -348,7 +415,6 @@ Başarı Oranı: {sonuçlar['başarı_oranı']}%
 app = Flask(__name__)
 bot = BISTBot()
 
-# FİXED: Timeout setting for Flask
 app.config['JSON_SORT_KEYS'] = False
 
 @app.route('/health', methods=['GET'])
@@ -360,8 +426,10 @@ def health():
         'bot_status': 'çalışıyor ✅',
         'is_scanning': bot.is_scanning,
         'turkey_time': turkey_time,
-        'next_scan': '09:30 (Her gün Pazartesi-Cuma)',
-        'bist_opens': '10:00',
+        'tarama_saati': '09:10 (Pazartesi-Cuma)',
+        'kapanma_saati': '18:00',
+        'bist_acilis': '10:00',
+        'bist_kapanisa': '18:00',
         'mode': 'SIGNAL (Manual Trading)',
         'database': 'SQLite ✅',
         'email': 'Enabled ✅',
@@ -435,8 +503,10 @@ def durum_endpoint():
         'status': 'success',
         'bot': {
             'durum': 'Çalışıyor ✅',
-            'tarama_saati': '09:30',
-            'bist_açılış': '10:00',
+            'tarama_saati': '09:10',
+            'kapanma_saati': '18:00',
+            'bist_acilis': '10:00',
+            'bist_kapanisa': '18:00',
             'timezone': TIMEZONE,
             'is_scanning': bot.is_scanning,
             'son_tarama': bot.son_tarama_zamanı.isoformat() if bot.son_tarama_zamanı else 'Henüz tarama yok',
@@ -502,21 +572,21 @@ if __name__ == '__main__':
 
         logger.info("="*60)
         logger.info(f"🌐 Flask App {port} Portunda Başlıyor...")
-        logger.info(f"📅 Tarama: 09:30 (Pazartesi-Cuma)")
-        logger.info(f"⏰ BIST: 10:00 (Senin karar zamanı)")
+        logger.info(f"📅 Tarama: 09:10 (Pazartesi-Cuma)")
+        logger.info(f"🛑 Kapanış: 18:00 (Günün Sonu)")
+        logger.info(f"⏰ BIST: 10:00-18:00 (Trading Saati)")
         logger.info(f"🤖 Mode: SİNYAL + TELEGRAM + EMAIL + DATABASE")
         logger.info(f"📊 Logging: Advanced (logs/ klasörü)")
         logger.info(f"🔒 Thread Safety: Enabled (Lock + Rate Limit)")
         logger.info(f"⏱️ Timeout: {bot.tarama_timeout}s")
         logger.info("="*60)
 
-        # FİXED: Timeout setting
         app.run(
             host='0.0.0.0',
             port=port,
             debug=False,
-            threaded=True,  # Thread-safe
-            timeout=bot.tarama_timeout + 60  # Flask timeout
+            threaded=True,
+            timeout=bot.tarama_timeout + 60
         )
 
     except KeyboardInterrupt:
