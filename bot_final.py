@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-BIST PYTHON BOT - FINAL VERSION + FAZA 1 (FIXED v2)
+BIST PYTHON BOT - FINAL VERSION + FAZA 1 (FIXED v3)
 Finnhub + Alpha Vantage + Telegram + Email + Database + Logging
-FİXED: Race Condition, Connection Pooling, Rate Limiting, Timeout, 18:00 Shutdown
+FİXED: Timeout parameter, Unicode, 18:00 Shutdown
 """
 import logging
 import os
@@ -74,7 +74,7 @@ class RateLimiter:
 # ============================================================================
 
 class BISTBot:
-    """BIST Python Bot - Sinyal Üreticisi + Database + Email + Thread Safe"""
+    """BIST Python Bot - Sinyal Ureticisi + Database + Email + Thread Safe"""
 
     def __init__(self):
         self.fetcher = DataFetcher()
@@ -91,23 +91,23 @@ class BISTBot:
         # Rate limiting
         self.rate_limiter = RateLimiter(max_requests=5, window_seconds=60)
 
-        self.tarama_sonuçları = {}
-        self.son_tarama_zamanı = None
-        self.tarama_timeout = 45 * 60  # 45 dakika max
+        self.tarama_sonuclari = {}
+        self.son_tarama_zamani = None
+        self.tarama_timeout = 45 * 60  # 45 minutes max
 
-        logger.info("🤖 BIST Bot Başlatılıyor...")
+        logger.info("Bot Baslatiluyor...")
 
     def tara(self, index: str = 'BIST100', timeout: int = None) -> Dict:
-        """BIST100 Taraması Yap (Thread-Safe)"""
+        """BIST100 Taramasi Yap (Thread-Safe)"""
         
         # Race condition - Lock
         with self.scan_lock:
             if self.is_scanning:
-                logger.warning("⚠️ Tarama zaten çalışıyor, yeni istek reddedildi")
+                logger.warning("Tarama zaten calisyor, yeni istek reddedildi")
                 return {
-                    'hata': 'Tarama zaten çalışıyor',
+                    'hata': 'Tarama zaten calisyor',
                     'toplam': 0,
-                    'tarama_geçen': 0
+                    'tarama_gecen': 0
                 }
             
             self.is_scanning = True
@@ -118,26 +118,26 @@ class BISTBot:
             
             start_time = time.time()
             perf_tracker.start_timer('tara')
-            logger.info(f"🔍 {index} Taraması Başlıyor (Timeout: {timeout}s)...")
+            logger.info(f"Tarama Baslaniyor: {index} (Timeout: {timeout}s)...")
 
             hisseler = self.fetcher.tarama_yap()
 
             if not hisseler:
-                logger.error(f"❌ {index} Veri Alınamadı")
+                logger.error(f"Veri Alinamadi: {index}")
                 struct_logger.log_event('SCAN_ERROR', {
                     'index': index,
-                    'reason': 'Veri alınamadı'
+                    'reason': 'Veri alinamadi'
                 })
-                return {'hata': 'Veri alınamadı', 'toplam': 0, 'tarama_geçen': 0}
+                return {'hata': 'Veri alinamadi', 'toplam': 0, 'tarama_gecen': 0}
 
-            tarama_geçenler = []
-            uyarılar = []
+            tarama_gecenler = []
+            uyarilar = []
 
             for hisse in hisseler:
                 # Timeout kontrol
                 elapsed = time.time() - start_time
                 if elapsed > timeout:
-                    logger.warning(f"⏱️ Timeout {timeout}s'ye ulaşıldı, tarama durduruldu")
+                    logger.warning(f"Timeout {timeout}s'ye ulasildi, tarama durduruldu")
                     break
                 
                 kod = hisse.get('kod')
@@ -145,14 +145,14 @@ class BISTBot:
                 try:
                     analiz_sonucu = self.analyzer.analiz_hisse(hisse)
 
-                    # Veritabanına kaydet
+                    # Veritabanina kaydet
                     self.db.tarama_kaydet(kod, analiz_sonucu)
 
-                    if analiz_sonucu.get('tarama_geçti'):
-                        tarama_geçenler.append(analiz_sonucu)
-                        logger.info(f"✅ {kod} Tarama Geçti (Skor: {analiz_sonucu.get('skor')}%)")
+                    if analiz_sonucu.get('tarama_gecti'):
+                        tarama_gecenler.append(analiz_sonucu)
+                        logger.info(f"OK {kod} Tarama Gecti (Skor: {analiz_sonucu.get('skor')}%)")
 
-                        # Sinyal olursa veritabanına kaydet
+                        # Sinyal olursa veritabanina kaydet
                         if analiz_sonucu.get('sinyal') in ['BUY', 'CAUTION']:
                             self.db.sinyal_kaydet(kod, analiz_sonucu)
                             struct_logger.log_trade_signal(
@@ -161,14 +161,14 @@ class BISTBot:
                                 analiz_sonucu
                             )
 
-                    if analiz_sonucu.get('uyarı'):
-                        uyarılar.append({
+                    if analiz_sonucu.get('uyari'):
+                        uyarilar.append({
                             'kod': kod,
-                            'mesaj': analiz_sonucu.get('uyarı'),
+                            'mesaj': analiz_sonucu.get('uyari'),
                         })
 
                 except Exception as e:
-                    logger.error(f"❌ {kod} Analiz Hatası: {str(e)}")
+                    logger.error(f"HATA {kod}: {str(e)}")
                     struct_logger.log_error_detail(
                         'ANALYSIS_ERROR',
                         str(e),
@@ -176,68 +176,68 @@ class BISTBot:
                     )
                     continue
 
-            # En yüksek skordan başlayarak sırala
-            tarama_geçenler.sort(key=lambda x: x.get('skor', 0), reverse=True)
+            # En yuksek skordan baslayarak sirala
+            tarama_gecenler.sort(key=lambda x: x.get('skor', 0), reverse=True)
 
-            sonuç = {
+            sonuc = {
                 'index': index,
-                'tarama_zamanı': datetime.now(pytz.timezone(TIMEZONE)).isoformat(),
+                'tarama_zamani': datetime.now(pytz.timezone(TIMEZONE)).isoformat(),
                 'toplam': len(hisseler),
-                'tarama_geçen': len(tarama_geçenler),
-                'uyarı_sayısı': len(uyarılar),
-                'başarı_oranı': int(len(tarama_geçenler) / len(hisseler) * 100) if hisseler else 0,
-                'hisseler': tarama_geçenler[:10],
-                'uyarılar': uyarılar[:5],
+                'tarama_gecen': len(tarama_gecenler),
+                'uyari_sayisi': len(uyarilar),
+                'basari_orani': int(len(tarama_gecenler) / len(hisseler) * 100) if hisseler else 0,
+                'hisseler': tarama_gecenler[:10],
+                'uyarilar': uyarilar[:5],
             }
 
-            # İstatistik kaydet
+            # Istatistik kaydet
             tarih = datetime.now(pytz.timezone(TIMEZONE)).strftime('%Y-%m-%d')
             self.db.tarama_istatistigi_kayret(tarih, {
                 'toplam': len(hisseler),
-                'gecen': len(tarama_geçenler),
-                'oran': sonuç['başarı_oranı'],
-                'ortalama_skor': sum([h.get('skor', 0) for h in tarama_geçenler]) / len(tarama_geçenler) if tarama_geçenler else 0
+                'gecen': len(tarama_gecenler),
+                'oran': sonuc['basari_orani'],
+                'ortalama_skor': sum([h.get('skor', 0) for h in tarama_gecenler]) / len(tarama_gecenler) if tarama_gecenler else 0
             })
 
-            self.tarama_sonuçları = sonuç
-            self.son_tarama_zamanı = datetime.now(pytz.timezone(TIMEZONE))
+            self.tarama_sonuclari = sonuc
+            self.son_tarama_zamani = datetime.now(pytz.timezone(TIMEZONE))
 
             # Performance log
             duration = perf_tracker.end_timer('tara')
-            struct_logger.log_scan_result(len(hisseler), len(tarama_geçenler), sonuç['başarı_oranı'])
+            struct_logger.log_scan_result(len(hisseler), len(tarama_gecenler), sonuc['basari_orani'])
 
-            logger.info(f"✅ Tarama Tamamlandı: {len(tarama_geçenler)}/{len(hisseler)} geçti ({duration:.2f}s)")
+            logger.info(f"Tarama Bitti: {len(tarama_gecenler)}/{len(hisseler)} gecti ({duration:.2f}s)")
 
-            return sonuç
+            return sonuc
 
         finally:
-            # Lock'u bırak
+            # Lock'u birak
             with self.scan_lock:
                 self.is_scanning = False
 
-    def bildir_tarama_sonuçları(self, sonuçlar: Dict):
-        """Tarama Sonuçlarını Telegram + Email'de Bildir"""
+    def bildir_tarama_sonuclari(self, sonuclar: Dict):
+        """Tarama Sonuclarina Telegram + Email'de Bildir"""
 
-        logger.info("📱📧 Telegram + Email Bildirimi Gönderiliyor...")
+        logger.info("Telegram + Email Bildirimi Gonderiliyor...")
 
         tr_time = datetime.now(pytz.timezone(TIMEZONE)).strftime('%H:%M:%S')
 
         mesaj = f"""
-🔔 BIST TARAMA SONUÇLARI
-⏰ Saat: {tr_time}
+BIST TARAMA SONUCLARI
+Saat: {tr_time}
 
-📊 ÖZET:
-Taraması Yapılan: {sonuçlar['toplam']}
-Tarama Geçen: {sonuçlar['tarama_geçen']}
-Başarı Oranı: {sonuçlar['başarı_oranı']}%
+OZET:
+Taramasi Yapilan: {sonuclar['toplam']}
+Tarama Gecen: {sonuclar['tarama_gecen']}
+Basari Orani: {sonuclar['basari_orani']}%
 
-⏱️ KARAR SÜRESİ: 09:50 - 10:00 (10 DAKIKA)
+KARAR SURESI: 09:50 - 10:00 (10 DAKIKA)
 """
 
-        if sonuçlar['hisseler']:
-            mesaj += "\n🟢 TARAMA GEÇEN HİSSELER (En İyi 5):\n\n"
+        if sonuclar['hisseler']:
+            mesaj += "\nTARAMA GECEN HISSELER (En Iyi 5):\n\n"
 
-            for i, h in enumerate(sonuçlar['hisseler'][:5], 1):
+            for i, h in enumerate(sonuclar['hisseler'][:5], 1):
                 kod = h['kod']
                 skor = h['skor']
                 fiyat = h.get('fiyat', 0)
@@ -247,32 +247,32 @@ Başarı Oranı: {sonuçlar['başarı_oranı']}%
                 mesaj += f"   Fiyat: {fiyat:.2f} TL | Skor: {skor}%\n\n"
 
         else:
-            mesaj += "\n⚠️ Tarama geçen hisse yok\n"
+            mesaj += "\nUYARI: Tarama gecen hisse yok\n"
 
         mesaj += "\n" + "="*50 + "\n"
-        mesaj += "📌 MANUEL KARAR VER!\n"
-        mesaj += "🎯 10:00'DA BIST AÇILIYOR\n"
-        mesaj += "⚠️ BOT: SİNYAL VERIR, SEN İŞLEM YAPARSSIN\n"
+        mesaj += "MANUEL KARAR VER!\n"
+        mesaj += "10:00'DA BIST ACILIYOR\n"
+        mesaj += "BOT: SINYAL VERIR, SEN ISLEM YAPARSSIN\n"
         mesaj += "="*50 + "\n"
 
         try:
             self.notifier.send_message_sync(mesaj)
-            logger.info("✅ Telegram Bildirimi Gönderildi")
+            logger.info("Telegram Bildirimi Gonderildi")
         except Exception as e:
-            logger.error(f"❌ Telegram Hatası: {str(e)}")
+            logger.error(f"Telegram Hatasi: {str(e)}")
             struct_logger.log_error_detail('TELEGRAM_ERROR', str(e))
 
         try:
-            self.email_notifier.bildir_tarama_sonucu(sonuçlar)
-            logger.info("✅ Email Bildirimi Gönderildi")
+            self.email_notifier.bildir_tarama_sonucu(sonuclar)
+            logger.info("Email Bildirimi Gonderildi")
         except Exception as e:
-            logger.error(f"❌ Email Hatası: {str(e)}")
+            logger.error(f"Email Hatasi: {str(e)}")
             struct_logger.log_error_detail('EMAIL_ERROR', str(e))
 
     def setup_scheduler(self):
-        """Scheduler'ı Kur - Pazartesi-Cuma 09:10 Tarama + 18:00 Kapanış"""
+        """Scheduler'i Kur - Pazartesi-Cuma 09:10 Tarama + 18:00 Kapanisi"""
 
-        # 09:10 Tarama Job'ı
+        # 09:10 Tarama Job'i
         self.scheduler.add_job(
             self.cron_tarama,
             trigger=CronTrigger(
@@ -282,10 +282,10 @@ Başarı Oranı: {sonuçlar['başarı_oranı']}%
                 timezone=TIMEZONE
             ),
             id='daily_screen',
-            name='09:10 Günlük Tarama'
+            name='09:10 Gunluk Tarama'
         )
 
-        # 18:00 Günün Sonu Kapanması
+        # 18:00 Gunun Sonu Kapanmasi
         self.scheduler.add_job(
             self.kapan_gunun_sonu,
             trigger=CronTrigger(
@@ -295,118 +295,118 @@ Başarı Oranı: {sonuçlar['başarı_oranı']}%
                 timezone=TIMEZONE
             ),
             id='daily_shutdown',
-            name='18:00 Günün Sonu Kapanması'
+            name='18:00 Gunun Sonu Kapanmasi'
         )
 
         if not self.scheduler.running:
             self.scheduler.start()
-            logger.info("✅ Scheduler Başlatıldı (09:10 Tarama + 18:00 Kapanış)")
+            logger.info("Scheduler Basladi (09:10 Tarama + 18:00 Kapanisi)")
 
     def cron_tarama(self):
-        """Cron Taraması (Scheduler tarafından çağrılır)"""
-        logger.info("⏰ Scheduled Tarama Tetiklendi")
+        """Cron Taramasi (Scheduler tarafindan cagirilir)"""
+        logger.info("Scheduled Tarama Tetiklendi")
         try:
-            sonuçlar = self.tara()
-            self.bildir_tarama_sonuçları(sonuçlar)
+            sonuclar = self.tara()
+            self.bildir_tarama_sonuclari(sonuclar)
         except Exception as e:
-            logger.error(f"❌ Cron Tarama Hatası: {str(e)}")
+            logger.error(f"Cron Tarama Hatasi: {str(e)}")
             self.email_notifier.bildir_hata(
-                f"Scheduled tarama başarısız: {str(e)}",
+                f"Scheduled tarama baslarisildi: {str(e)}",
                 str(e)
             )
 
     def kapan_gunun_sonu(self):
-        """18:00 Günün Sonu Kapanması - Açık Pozisyonları Kontrol Et"""
-        logger.info("🛑 18:00 Günün Sonu - Pozisyon Kontrol")
+        """18:00 Gunun Sonu Kapanmasi - Acik Pozisyonlari Kontrol Et"""
+        logger.info("18:00 Gunun Sonu - Pozisyon Kontrol")
         
         try:
-            # Açık pozisyonları getir
+            # Acik pozisyonlari getir
             sinyaller = self.db.acik_sinyaller_getir()
             acik_pozisyon_sayisi = len(list(sinyaller)) if sinyaller else 0
             
             if acik_pozisyon_sayisi > 0:
-                logger.warning(f"⚠️ {acik_pozisyon_sayisi} Açık Pozisyon Kapalı!")
+                logger.warning(f"UYARI: {acik_pozisyon_sayisi} Acik Pozisyon Kaldi!")
                 
                 # Email ile uyar
                 self.email_notifier.bildir_hata(
-                    "🛑 GÜNÜN SONU - Açık Pozisyonlar",
-                    f"⚠️ {acik_pozisyon_sayisi} pozisyon açık!\n\nLütfen broker'da manuel olarak TÜM POZİSYONLARI KAPAYIN!\n\n18:00'den sonra işlem yapılamaz."
+                    "GUNUN SONU - Acik Pozisyonlar",
+                    f"UYARI: {acik_pozisyon_sayisi} pozisyon acik!\n\nLutfen broker'da manuel olarak TUM POZISYONLARI KAPAYIN!\n\n18:00'den sonra islem yapilamaz."
                 )
                 
                 # Telegram da uyar
                 try:
                     kapan_mesaj = f"""
-🛑 GÜNÜN SONU - 18:00
+GUNUN SONU - 18:00
 
-⚠️ AÇIK POZİSYON VAR: {acik_pozisyon_sayisi}
+UYARI ACIK POZISYON VAR: {acik_pozisyon_sayisi}
 
-📌 LÜTFEN:
-1. Broker uygulamasını aç
-2. TÜM POZİSYONLARI KAPAT
-3. İşlem bitirme-den sakın!
+LUTFEN:
+1. Broker uygulamasini ac
+2. TUM POZISYONLARI KAPAT
+3. Islem bitirmeden sakin!
 
-⏰ 18:00'den sonra işlem yapılamaz!
+18:00'den sonra islem yapilamaz!
 """
                     self.notifier.send_message_sync(kapan_mesaj)
                 except:
                     pass
             else:
-                logger.info("✅ Günün Sonu - Tüm Pozisyonlar Kapalı")
+                logger.info("Gunun Sonu - Tum Pozisyonlar Kapali")
             
-            # Log dosyasına kaydet
+            # Log dosyasina kaydet
             struct_logger.log_event('DAILY_SHUTDOWN', {
                 'acik_pozisyon': acik_pozisyon_sayisi,
                 'saat': datetime.now(pytz.timezone(TIMEZONE)).isoformat()
             })
             
-            logger.info("✅ Günün Sonu İşlemi Tamamlandı")
+            logger.info("Gunun Sonu Islemi Tamamlandi")
             
         except Exception as e:
-            logger.error(f"❌ Günün Sonu Hatası: {str(e)}")
+            logger.error(f"Gunun Sonu Hatasi: {str(e)}")
             self.email_notifier.bildir_hata(
-                "❌ Günün Sonu Hata",
+                "Gunun Sonu Hata",
                 str(e)
             )
 
     def manuel_tarama(self, user_id: str = None) -> Dict:
-        """Şu Anda Manuel Tarama Yap (Rate Limited)"""
+        """Suan Manuel Tarama Yap (Rate Limited)"""
 
-        logger.info(f"🔍 Manuel Tarama Tetiklendi (User: {user_id})")
+        logger.info(f"Manuel Tarama Tetiklendi (User: {user_id})")
         
         # Rate limiting
         if user_id:
             if not self.rate_limiter.is_allowed(user_id):
-                logger.warning(f"❌ Rate limit exceeded for user {user_id}")
+                logger.warning(f"Rate limit exceeded: {user_id}")
                 return {
-                    'hata': 'Çok fazla istek (5 istek/dakika sınırı)',
+                    'hata': 'Cok fazla istek (5 istek/dakika siniri)',
                     'toplam': 0,
-                    'tarama_geçen': 0
+                    'tarama_gecen': 0
                 }
 
         try:
-            sonuçlar = self.tara()
-            self.bildir_tarama_sonuçları(sonuçlar)
-            return sonuçlar
+            sonuclar = self.tara()
+            self.bildir_tarama_sonuclari(sonuclar)
+            return sonuclar
         except Exception as e:
-            logger.error(f"❌ Manuel Tarama Hatası: {str(e)}")
+            logger.error(f"Manuel Tarama Hatasi: {str(e)}")
             self.email_notifier.bildir_hata(
-                f"Manuel tarama başarısız: {str(e)}",
+                f"Manuel tarama baslarisildi: {str(e)}",
                 str(e)
             )
             return {'hata': str(e)}
 
-    def başlat(self):
-        """Bot'u Başlat"""
-        logger.info("🚀 Bot Başlatılıyor...")
+    def baslat(self):
+        """Bot'u Baslat"""
+        logger.info("Bot Baslaniyor...")
         self.setup_scheduler()
-        logger.info("✅ Bot Hazır ve Çalışıyor")
+        logger.info("Bot Hazir ve Calisyor")
 
     def durdur(self):
         """Bot'u Durdur"""
-        logger.info("🛑 Bot Durduruluyor...")
+        logger.info("Bot Durduruluyor...")
         if self.scheduler.running:
             self.scheduler.shutdown()
-        logger.info("✅ Bot Durduruldu")
+        logger.info("Bot Durduruldu")
 
 # ============================================================================
 # FLASK APP
@@ -419,11 +419,11 @@ app.config['JSON_SORT_KEYS'] = False
 
 @app.route('/health', methods=['GET'])
 def health():
-    """Sağlık Kontrolü"""
+    """Saglik Kontrolu"""
     turkey_time = datetime.now(pytz.timezone(TIMEZONE)).strftime('%H:%M:%S')
     return jsonify({
         'status': 'healthy',
-        'bot_status': 'çalışıyor ✅',
+        'bot_status': 'calisyor',
         'is_scanning': bot.is_scanning,
         'turkey_time': turkey_time,
         'tarama_saati': '09:10 (Pazartesi-Cuma)',
@@ -431,11 +431,47 @@ def health():
         'bist_acilis': '10:00',
         'bist_kapanisa': '18:00',
         'mode': 'SIGNAL (Manual Trading)',
-        'database': 'SQLite ✅',
-        'email': 'Enabled ✅',
-        'logging': 'Advanced ✅',
-        'rate_limiting': 'Enabled ✅',
+        'database': 'SQLite OK',
+        'email': 'Enabled',
+        'logging': 'Advanced',
+        'rate_limiting': 'Enabled',
         'timeout': f'{bot.tarama_timeout}s'
+    }), 200
+
+@app.route('/durum', methods=['GET'])
+def durum_endpoint():
+    """Bot Durumu"""
+
+    return jsonify({
+        'status': 'success',
+        'bot': {
+            'durum': 'Calisyor',
+            'tarama_saati': '09:10',
+            'kapanma_saati': '18:00',
+            'bist_acilis': '10:00',
+            'bist_kapanisa': '18:00',
+            'timezone': TIMEZONE,
+            'is_scanning': bot.is_scanning,
+            'son_tarama': bot.son_tarama_zamani.isoformat() if bot.son_tarama_zamani else 'Henuz tarama yok',
+            'tarama_sonuclari': len(bot.tarama_sonuclari),
+            'database': 'SQLite OK',
+            'email_notifier': 'Enabled',
+            'logging': 'Advanced',
+            'rate_limiting': 'Enabled',
+            'timeout': f'{bot.tarama_timeout}s'
+        }
+    }), 200
+
+@app.route('/sonuc', methods=['GET'])
+def sonuc_endpoint():
+    """Son Tarama Sonuclari"""
+
+    if not bot.tarama_sonuclari:
+        return jsonify({'error': 'Henuz tarama yapilmamis'}), 404
+
+    return jsonify({
+        'status': 'success',
+        'data': bot.tarama_sonuclari
     }), 200
 
 @app.route('/tara', methods=['POST'])
@@ -446,33 +482,21 @@ def tara_endpoint():
         user_id = request.json.get('user_id') if request.json else None
 
         if user_id and user_id not in ALLOWED_USERS:
-            logger.warning(f"⚠️ Yetkisiz Tarama İsteği: {user_id}")
+            logger.warning(f"Yetkilsiz Tarama Istegi: {user_id}")
             return jsonify({'error': 'Yetkiniz yok'}), 403
 
-        logger.info(f"📥 Manuel Tarama İsteği (User: {user_id})")
+        logger.info(f"Manuel Tarama Istegi (User: {user_id})")
 
-        sonuçlar = bot.manuel_tarama(user_id)
+        sonuclar = bot.manuel_tarama(user_id)
 
         return jsonify({
             'status': 'success',
-            'data': sonuçlar
+            'data': sonuclar
         }), 200
 
     except Exception as e:
-        logger.error(f"❌ Tarama Hatası: {str(e)}")
+        logger.error(f"Tarama Hatasi: {str(e)}")
         return jsonify({'error': str(e)}), 500
-
-@app.route('/sonuç', methods=['GET'])
-def sonuç_endpoint():
-    """Son Tarama Sonuçları"""
-
-    if not bot.tarama_sonuçları:
-        return jsonify({'error': 'Henüz tarama yapılmamış'}), 404
-
-    return jsonify({
-        'status': 'success',
-        'data': bot.tarama_sonuçları
-    }), 200
 
 @app.route('/hisse/<kod>', methods=['GET'])
 def get_hisse_endpoint(kod):
@@ -482,7 +506,7 @@ def get_hisse_endpoint(kod):
         veri = bot.fetcher.get_bist_verisi(kod.upper())
 
         if not veri:
-            return jsonify({'error': f'{kod} Bulunamadı'}), 404
+            return jsonify({'error': f'{kod} Bulunamadi'}), 404
 
         analiz = bot.analyzer.analiz_hisse(veri)
 
@@ -492,36 +516,12 @@ def get_hisse_endpoint(kod):
         }), 200
 
     except Exception as e:
-        logger.error(f"❌ Hisse Analizi Hatası ({kod}): {str(e)}")
+        logger.error(f"Hisse Analizi Hatasi ({kod}): {str(e)}")
         return jsonify({'error': str(e)}), 500
-
-@app.route('/durum', methods=['GET'])
-def durum_endpoint():
-    """Bot Durumu"""
-
-    return jsonify({
-        'status': 'success',
-        'bot': {
-            'durum': 'Çalışıyor ✅',
-            'tarama_saati': '09:10',
-            'kapanma_saati': '18:00',
-            'bist_acilis': '10:00',
-            'bist_kapanisa': '18:00',
-            'timezone': TIMEZONE,
-            'is_scanning': bot.is_scanning,
-            'son_tarama': bot.son_tarama_zamanı.isoformat() if bot.son_tarama_zamanı else 'Henüz tarama yok',
-            'tarama_sonuçları': len(bot.tarama_sonuçları),
-            'database': 'SQLite ✅',
-            'email_notifier': 'Enabled ✅',
-            'logging': 'Advanced ✅',
-            'rate_limiting': 'Enabled ✅',
-            'timeout': f'{bot.tarama_timeout}s'
-        }
-    }), 200
 
 @app.route('/acik-sinyaller', methods=['GET'])
 def acik_sinyaller_endpoint():
-    """Açık Sinyalleri Getir"""
+    """Acik Sinyalleri Getir"""
 
     try:
         sinyaller = bot.db.acik_sinyaller_getir()
@@ -532,7 +532,7 @@ def acik_sinyaller_endpoint():
         }), 200
 
     except Exception as e:
-        logger.error(f"❌ Sinyal Getirme Hatası: {str(e)}")
+        logger.error(f"Sinyal Getirme Hatasi: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/performans', methods=['GET'])
@@ -548,17 +548,17 @@ def performans_endpoint():
         }), 200
 
     except Exception as e:
-        logger.error(f"❌ Performans Getirme Hatası: {str(e)}")
+        logger.error(f"Performans Getirme Hatasi: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.errorhandler(404)
 def not_found(error):
-    return jsonify({'error': 'Endpoint Bulunamadı'}), 404
+    return jsonify({'error': 'Endpoint Bulunamadi'}), 404
 
 @app.errorhandler(500)
 def server_error(error):
-    logger.error(f"❌ Server Hatası: {str(error)}")
-    return jsonify({'error': 'Sunucu Hatası'}), 500
+    logger.error(f"Server Hatasi: {str(error)}")
+    return jsonify({'error': 'Sunucu Hatasi'}), 500
 
 # ============================================================================
 # MAIN
@@ -566,33 +566,33 @@ def server_error(error):
 
 if __name__ == '__main__':
     try:
-        bot.başlat()
+        bot.baslat()
 
         port = int(os.environ.get('PORT', 8080))
 
         logger.info("="*60)
-        logger.info(f"🌐 Flask App {port} Portunda Başlıyor...")
-        logger.info(f"📅 Tarama: 09:10 (Pazartesi-Cuma)")
-        logger.info(f"🛑 Kapanış: 18:00 (Günün Sonu)")
-        logger.info(f"⏰ BIST: 10:00-18:00 (Trading Saati)")
-        logger.info(f"🤖 Mode: SİNYAL + TELEGRAM + EMAIL + DATABASE")
-        logger.info(f"📊 Logging: Advanced (logs/ klasörü)")
-        logger.info(f"🔒 Thread Safety: Enabled (Lock + Rate Limit)")
-        logger.info(f"⏱️ Timeout: {bot.tarama_timeout}s")
+        logger.info(f"Flask App {port} Portunda Baslaniyor...")
+        logger.info(f"Tarama: 09:10 (Pazartesi-Cuma)")
+        logger.info(f"Kapanisi: 18:00 (Gunun Sonu)")
+        logger.info(f"BIST: 10:00-18:00 (Trading Saati)")
+        logger.info(f"Mode: SINYAL + TELEGRAM + EMAIL + DATABASE")
+        logger.info(f"Logging: Advanced (logs/ klasoru)")
+        logger.info(f"Thread Safety: Enabled (Lock + Rate Limit)")
+        logger.info(f"Timeout: {bot.tarama_timeout}s")
         logger.info("="*60)
 
+        # FİXED: timeout parametresi kaldırıldı
         app.run(
             host='0.0.0.0',
             port=port,
             debug=False,
-            threaded=True,
-            timeout=bot.tarama_timeout + 60
+            threaded=True
         )
 
     except KeyboardInterrupt:
-        logger.info("⌛ Bot kapatılıyor...")
+        logger.info("Bot kapatiliyor...")
         bot.durdur()
 
     except Exception as e:
-        logger.error(f"❌ HATA: {str(e)}")
+        logger.error(f"HATA: {str(e)}")
         bot.durdur()
