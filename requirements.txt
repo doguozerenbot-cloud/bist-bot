@@ -14,4 +14,4 @@ google-api-python-client==2.100.0
 # No additional packages needed
 
 # Logging (built-in)
-# No additional packages needed
+# No additional packages neededgunicorn==21.2.0
